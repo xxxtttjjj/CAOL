@@ -1,0 +1,9 @@
+# Install a matching torch/torchaudio pair for your hardware separately.
+# Install dataoceanai-dolphin following the upstream documentation.
+# These are dependency names, not a reproduction lockfile.
+numpy
+pandas
+scikit-learn
+matplotlib
+openpyxl
+soundfile

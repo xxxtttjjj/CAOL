@@ -38,24 +38,17 @@ def _classification_metrics(
             zero_division=0,
         )
     )
-
-    try:
-        auc = float(
-            roc_auc_score(
-                labels,
-                probabilities,
-                labels=class_ids,
-                multi_class="ovr",
-                average="macro",
-            )
+    auc = float(
+        roc_auc_score(
+            labels,
+            probabilities,
+            labels=class_ids,
+            multi_class="ovr",
+            average="macro",
         )
-    except ValueError:
-        auc = float("nan")
+    )
+    qwk = float(cohen_kappa_score(labels, predictions, weights="quadratic"))
 
-    try:
-        qwk = float(cohen_kappa_score(labels, predictions, weights="quadratic"))
-    except ValueError:
-        qwk = float("nan")
 
     return {
         "acc": float(accuracy_score(labels, predictions)),
@@ -89,10 +82,6 @@ def _median_consensus(hard_labels: np.ndarray) -> np.ndarray:
     consensus = []
     for row in hard_labels:
         valid_labels = row[row >= 0]
-        if valid_labels.size == 0:
-            raise ValueError(
-                "Every evaluated sample needs at least one valid doctor label."
-            )
         consensus.append(int(np.median(valid_labels)))
     return np.asarray(consensus, dtype=int)
 

@@ -42,15 +42,11 @@ class DolphinEncoderCORALClassifier(nn.Module):
         doctor_ffn_multiplier: int = 2,
     ):
         super().__init__()
-        if num_classes < 2:
-            raise ValueError("num_classes must be at least 2.")
-        if not 0 < coral_min_threshold_gap < 1:
-            raise ValueError("coral_min_threshold_gap must be between 0 and 1.")
-
-        self.use_layer = int(use_layer)
-        self.use_specaug = bool(use_specaug)
-        self.num_classes = int(num_classes)
-        self.coral_min_threshold_gap = float(coral_min_threshold_gap)
+        
+        self.use_layer = use_layer
+        self.use_specaug = use_specaug
+        self.num_classes = num_classes
+        self.coral_min_threshold_gap = coral_min_threshold_gap
 
         dolphin_model = dolphin.load_model(
             dolphin_model_name,
@@ -62,19 +58,12 @@ class DolphinEncoderCORALClassifier(nn.Module):
 
         num_encoder_layers = len(self.encoder.encoders)
         layer_index = self.use_layer - 1
-        if layer_index not in range(num_encoder_layers):
-            raise ValueError(
-                f"use_layer={self.use_layer} is invalid for an encoder with "
-                f"{num_encoder_layers} layers."
-            )
         self._target_hidden: Optional[torch.Tensor] = None
         self.encoder.encoders[layer_index].register_forward_hook(
             self._capture_target_hidden
         )
 
         output_size = getattr(self.encoder, "output_size", None)
-        if not callable(output_size):
-            raise AttributeError("The Dolphin encoder must expose output_size().")
         feature_dim = int(output_size())
         self.temporal_cnn = MaskedTemporalConvBlock(
             feature_dim,
@@ -211,13 +200,7 @@ class DolphinEncoderCORALClassifier(nn.Module):
         with torch.set_grad_enabled(encoder_requires_grad):
             encoder_outputs = self.encoder(features, feature_lengths)
             hidden = self._target_hidden
-            if hidden is None:
-                raise RuntimeError("The selected encoder layer produced no output.")
             hidden = self._unwrap_tensor(hidden)
-            if hidden.ndim != 3:
-                raise ValueError(
-                    f"Expected encoder features [B,T,D], got {hidden.shape}."
-                )
             if hidden.size(0) != speech.size(0) and hidden.size(1) == speech.size(0):
                 hidden = hidden.transpose(0, 1)
 

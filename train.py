@@ -9,6 +9,7 @@ from typing import Dict
 import matplotlib
 
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -28,125 +29,78 @@ from torch.utils.data import DataLoader
 
 from dataset import PatientDataset, collate_fn, read_label_table
 from evaluate import evaluate_model
-
-
-ENCODER_BACKEND = os.environ.get("ENCODER_BACKEND", "dolphin").strip().lower()
-if ENCODER_BACKEND == "dolphin":
-    from model import DolphinEncoderCORALClassifier as EncoderClassifier
-elif ENCODER_BACKEND in {"wav2vec2", "whisper", "sensevoice"}:
-    from pretrained_encoder_model import (
-        FrozenPretrainedEncoderCORALClassifier as EncoderClassifier,
-    )
-else:
-    raise ValueError(
-        "ENCODER_BACKEND must be dolphin, wav2vec2, whisper, or sensevoice."
-    )
+from model import DolphinEncoderCORALClassifier as EncoderClassifier
 
 
 NUM_CLASSES = 4
 NUM_ANNOTATORS = 3
 IGNORE_INDEX = -1
+
 CLASS_NAMES = {
     0: "normal",
     1: "near_normal",
     2: "mild_abnormal",
     3: "abnormal",
 }
+
 LABEL_COLUMNS = [f"label{index}" for index in range(NUM_ANNOTATORS)]
 REQUIRED_COLUMNS = ["patient_id", "split", "wav_filename", *LABEL_COLUMNS]
 
+ENCODER_BACKEND = "dolphin"
+
 PROJECT_DIR = Path(__file__).resolve().parent
-DATA_DIR = Path(
-    os.environ.get("DATA_DIR", str(PROJECT_DIR / "data" / "labels"))
-)
-WAV_DIR = os.environ.get("WAV_DIR", str(PROJECT_DIR / "data" / "wav"))
-RESULTS_DIR = Path(
-    os.environ.get(
-        "RESULTS_DIR", str(PROJECT_DIR / "outputs" / ENCODER_BACKEND)
-    )
-)
-DEVICE = os.environ.get(
-    "DEVICE", "cuda:0" if torch.cuda.is_available() else "cpu"
-)
+DATA_DIR = PROJECT_DIR / "data" / "labels"
+WAV_DIR = PROJECT_DIR / "data" / "wav"
+RESULTS_DIR = PROJECT_DIR / "outputs" / ENCODER_BACKEND
 
-DOCTOR_LOSS_WEIGHT = float(os.environ.get("DOCTOR_LOSS_WEIGHT", "1.0"))
-MODE_LOSS_START_WEIGHT = float(
-    os.environ.get("MODE_LOSS_START_WEIGHT", "0.5")
-)
-MODE_LOSS_END_WEIGHT = float(
-    os.environ.get("MODE_LOSS_END_WEIGHT", "0.2")
-)
-MODE_LOSS_DECAY_EPOCHS = int(
-    os.environ.get("MODE_LOSS_DECAY_EPOCHS", "10")
-)
-FOCAL_GAMMA = float(os.environ.get("FOCAL_GAMMA", "2.0"))
-FOCAL_USE_ALPHA = os.environ.get("FOCAL_USE_ALPHA", "1").lower() not in {
-    "0",
-    "false",
-    "no",
-}
-FOCAL_ALPHA_STRENGTH = float(
-    os.environ.get("FOCAL_ALPHA_STRENGTH", "0.5")
-)
+DEVICE = "cuda:0"
 
-ENCODER_LAYER = int(os.environ.get("ENCODER_LAYER", "9"))
-TEMPORAL_CNN_BOTTLENECK_DIM = int(
-    os.environ.get("TEMPORAL_CNN_BOTTLENECK_DIM", "64")
-)
-TEMPORAL_CNN_KERNEL_SIZE = int(
-    os.environ.get("TEMPORAL_CNN_KERNEL_SIZE", "5")
-)
-TEMPORAL_CNN_DROPOUT = float(
-    os.environ.get("TEMPORAL_CNN_DROPOUT", "0.1")
-)
-CORAL_MIN_THRESHOLD_GAP = float(
-    os.environ.get("CORAL_MIN_THRESHOLD_GAP", "1e-3")
-)
-DOCTOR_QUERY_DIM = int(os.environ.get("DOCTOR_QUERY_DIM", "32"))
-DOCTOR_NUM_ATTENTION_HEADS = int(
-    os.environ.get("DOCTOR_NUM_ATTENTION_HEADS", "2")
-)
-DOCTOR_NUM_SELF_ATTENTION_LAYERS = int(
-    os.environ.get("DOCTOR_NUM_SELF_ATTENTION_LAYERS", "1")
-)
-DOCTOR_QUERY_DROPOUT = float(
-    os.environ.get("DOCTOR_QUERY_DROPOUT", "0.1")
-)
-DOCTOR_FFN_MULTIPLIER = int(
-    os.environ.get("DOCTOR_FFN_MULTIPLIER", "2")
-)
 
-BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "8"))
-NUM_EPOCHS = int(os.environ.get("NUM_EPOCHS", "100"))
-NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "2"))
-RANDOM_SEEDS = [
-    int(value)
-    for value in os.environ.get("RANDOM_SEEDS", "43").split(",")
-    if value.strip()
-]
+DOCTOR_LOSS_WEIGHT = 1.0
+MODE_LOSS_START_WEIGHT = 0.5
+MODE_LOSS_END_WEIGHT = 0.2
+MODE_LOSS_DECAY_EPOCHS = 10
+
+FOCAL_GAMMA = 2.0
+FOCAL_USE_ALPHA = 1
+FOCAL_ALPHA_STRENGTH = 0.5
+
+
+ENCODER_LAYER = 9
+
+TEMPORAL_CNN_BOTTLENECK_DIM = 64
+TEMPORAL_CNN_KERNEL_SIZE = 5
+TEMPORAL_CNN_DROPOUT = 0.1
+
+CORAL_MIN_THRESHOLD_GAP = 0.1
+
+DOCTOR_QUERY_DIM = 32
+DOCTOR_NUM_ATTENTION_HEADS = 2
+DOCTOR_NUM_SELF_ATTENTION_LAYERS = 1
+DOCTOR_QUERY_DROPOUT = 0.1
+DOCTOR_FFN_MULTIPLIER = 2
+
+
+BATCH_SIZE = 8
+NUM_EPOCHS = 100
+NUM_WORKERS = 2
+
+RANDOM_SEEDS = [43]
 CV_NUM_FOLDS = 5
 INNER_VAL_RATIO = 0.20
 EARLY_STOPPING_PATIENCE = 20
+
 LEARNING_RATE = 1e-4
 ENCODER_LEARNING_RATE = 5e-7
 WEIGHT_DECAY = 1e-4
+
 USE_SPECAUG = True
 
-if not RANDOM_SEEDS:
-    raise ValueError("RANDOM_SEEDS must contain at least one integer.")
-if BATCH_SIZE <= 0 or NUM_EPOCHS <= 0 or NUM_WORKERS < 0:
-    raise ValueError("Invalid batch size, epoch count, or worker count.")
-if ENCODER_LAYER <= 0:
-    raise ValueError("ENCODER_LAYER must be positive (one-based indexing).")
-if MODE_LOSS_DECAY_EPOCHS <= 0:
-    raise ValueError("MODE_LOSS_DECAY_EPOCHS must be positive.")
-if min(DOCTOR_LOSS_WEIGHT, MODE_LOSS_START_WEIGHT, MODE_LOSS_END_WEIGHT) < 0:
-    raise ValueError("Loss weights must be non-negative.")
-if FOCAL_GAMMA < 0 or not 0 <= FOCAL_ALPHA_STRENGTH <= 1:
-    raise ValueError("Invalid focal-loss configuration.")
-
 SPLIT_LABEL_FILES = {
-    split: [DATA_DIR / f"{split}{index}.xlsx" for index in range(NUM_ANNOTATORS)]
+    split: [
+        DATA_DIR / f"{split}{index}.xlsx"
+        for index in range(NUM_ANNOTATORS)
+    ]
     for split in ("train", "val", "test")
 }
 
@@ -171,17 +125,23 @@ def set_seed(seed: int):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
 
+
 def _model_kwargs(device: str) -> dict:
-    kwargs = {
+    return {
+        "dolphin_model_name": "small",
+        "dolphin_model_dir": (
+            os.environ.get("DOLPHIN_MODEL_DIR", "").strip() or None
+        ),
         "device": device,
         "use_layer": ENCODER_LAYER,
         "freeze_s2t": True,
         "freeze_layer": 12,
-        "use_specaug": USE_SPECAUG if ENCODER_BACKEND == "dolphin" else False,
+        "use_specaug": USE_SPECAUG,
         "head_hidden_size": 64,
         "head_dropout_rate": 0.5,
         "num_classes": NUM_CLASSES,
@@ -198,24 +158,6 @@ def _model_kwargs(device: str) -> dict:
         "doctor_query_dropout": DOCTOR_QUERY_DROPOUT,
         "doctor_ffn_multiplier": DOCTOR_FFN_MULTIPLIER,
     }
-    if ENCODER_BACKEND == "dolphin":
-        kwargs.update(
-            dolphin_model_name="small",
-            dolphin_model_dir=(
-                os.environ.get("DOLPHIN_MODEL_DIR", "").strip() or None
-            ),
-        )
-    else:
-        model_dir = os.environ.get("PRETRAINED_MODEL_DIR", "").strip()
-        if not model_dir:
-            raise ValueError(
-                f"PRETRAINED_MODEL_DIR is required for {ENCODER_BACKEND}."
-            )
-        kwargs.update(
-            encoder_backend=ENCODER_BACKEND,
-            pretrained_model_dir=model_dir,
-        )
-    return kwargs
 
 
 def build_model(device: str):
@@ -223,7 +165,9 @@ def build_model(device: str):
 
 
 def build_loader(
-    dataset: PatientDataset, batch_size: int, shuffle: bool
+    dataset: PatientDataset,
+    batch_size: int,
+    shuffle: bool,
 ) -> DataLoader:
     return DataLoader(
         dataset,
@@ -236,10 +180,16 @@ def build_loader(
     )
 
 
-def normalize_single_label_df(path: Path, label_column: str) -> pd.DataFrame:
+
+def normalize_single_label_df(
+    path: Path,
+    label_column: str,
+) -> pd.DataFrame:
     df = read_label_table(path)
+
     if "patient_id" not in df.columns and "ID" in df.columns:
         df = df.rename(columns={"ID": "patient_id"})
+
     required = {"patient_id", "split", "speech_label"}
     missing = sorted(required - set(df.columns))
     if missing:
@@ -248,9 +198,12 @@ def normalize_single_label_df(path: Path, label_column: str) -> pd.DataFrame:
     df = df.copy()
     df["patient_id"] = df["patient_id"].astype(str).str.strip()
     df["split"] = df["split"].astype(str).str.strip().str.lower()
+
     if "wav_filename" not in df.columns:
         df["wav_filename"] = df["patient_id"] + ".wav"
+
     df["wav_filename"] = df["wav_filename"].astype(str).str.strip()
+
     df[label_column] = (
         pd.to_numeric(df["speech_label"], errors="coerce")
         .fillna(IGNORE_INDEX)
@@ -261,20 +214,26 @@ def normalize_single_label_df(path: Path, label_column: str) -> pd.DataFrame:
     invalid = sorted(set(df[label_column]) - valid_labels)
     if invalid:
         raise ValueError(f"Invalid labels in {path}: {invalid}")
+
     if df["patient_id"].duplicated().any():
         raise ValueError(f"{path} contains duplicate patient IDs.")
+
     return df[["patient_id", "split", "wav_filename", label_column]]
 
 
 def load_split_df(split_name: str) -> pd.DataFrame:
     tables = []
+
     for index, path in enumerate(SPLIT_LABEL_FILES[split_name]):
         table = normalize_single_label_df(path, f"label{index}")
+
         if set(table["split"]) != {split_name}:
             raise ValueError(f"{path} contains an unexpected split value.")
+
         tables.append(table)
 
     merged = tables[0]
+
     for index, table in enumerate(tables[1:], start=1):
         merged = merged.merge(
             table[["patient_id", "wav_filename", f"label{index}"]],
@@ -282,47 +241,81 @@ def load_split_df(split_name: str) -> pd.DataFrame:
             how="inner",
             validate="one_to_one",
         )
-    if len(merged) != len(tables[0]):
-        raise ValueError(f"The label files for {split_name} do not match.")
+
     return merged[REQUIRED_COLUMNS].reset_index(drop=True)
 
 
 def load_fixed_splits() -> Dict[str, pd.DataFrame]:
-    return {split: load_split_df(split) for split in SPLIT_LABEL_FILES}
+    return {
+        split: load_split_df(split)
+        for split in SPLIT_LABEL_FILES
+    }
 
 
 def median_consensus_labels(df: pd.DataFrame) -> np.ndarray:
     consensus = []
+
     for row in df[LABEL_COLUMNS].to_numpy(dtype=int):
         valid = row[row >= 0]
-        if valid.size == 0:
-            raise ValueError("Each sample needs at least one valid doctor label.")
         consensus.append(int(np.median(valid)))
+
     return np.asarray(consensus, dtype=int)
 
 
-def median_consensus_from_batch(hard_labels: torch.Tensor) -> torch.Tensor:
-    if hard_labels.ndim != 2:
-        raise ValueError("hard_labels must have shape [batch, annotators].")
+def median_consensus_from_batch(
+    hard_labels: torch.Tensor,
+) -> torch.Tensor:
     medians = []
+
     for row in hard_labels.long():
         valid = row[row >= 0]
+
         if valid.numel() == 0:
-            raise ValueError("Each sample needs at least one valid doctor label.")
+            raise ValueError(
+                "Each sample needs at least one valid doctor label."
+            )
+
         ordered = valid.sort().values
         middle = ordered.numel() // 2
+
         medians.append(
             ordered[middle]
             if ordered.numel() % 2
             else (ordered[middle - 1] + ordered[middle]) // 2
         )
+
     return torch.stack(medians)
 
 
+def dataset_from_df(df: pd.DataFrame) -> PatientDataset:
+    return PatientDataset(
+        df[REQUIRED_COLUMNS].copy(),
+        WAV_DIR,
+        normalize=ENCODER_BACKEND == "dolphin",
+        num_classes=NUM_CLASSES,
+        label_columns=LABEL_COLUMNS,
+    )
+
+
+def format_split_counts(df: pd.DataFrame) -> str:
+    labels = median_consensus_labels(df)
+    counts = np.bincount(labels, minlength=NUM_CLASSES)
+
+    return ", ".join(
+        f"{CLASS_NAMES[index]}={count}"
+        for index, count in enumerate(counts)
+    )
+
+
+
 def labels_to_coral_targets(
-    labels: torch.Tensor, num_classes: int
+    labels: torch.Tensor,
+    num_classes: int,
 ) -> torch.Tensor:
-    levels = torch.arange(num_classes - 1, device=labels.device)
+    levels = torch.arange(
+        num_classes - 1,
+        device=labels.device,
+    )
     return (labels.unsqueeze(-1) > levels).float()
 
 
@@ -333,7 +326,10 @@ def get_mode_loss_weight(
     decay_epochs: int,
 ) -> float:
     progress = min(max(epoch, 0) / decay_epochs, 1.0)
-    return float(start_weight + progress * (end_weight - start_weight))
+    return float(
+        start_weight
+        + progress * (end_weight - start_weight)
+    )
 
 
 def focal_binary_cross_entropy_with_logits(
@@ -343,31 +339,46 @@ def focal_binary_cross_entropy_with_logits(
     alpha_pos=None,
     reduction="mean",
 ):
-    if gamma < 0:
-        raise ValueError("Focal gamma must be non-negative.")
-    bce = F.binary_cross_entropy_with_logits(logits, targets, reduction="none")
+    bce = F.binary_cross_entropy_with_logits(
+        logits,
+        targets,
+        reduction="none",
+    )
+
     weight = (1 - torch.exp(-bce)) ** gamma
+
     if alpha_pos is not None:
-        alpha_pos = alpha_pos.to(device=logits.device, dtype=logits.dtype)
-        weight = weight * (
-            alpha_pos * targets + (1 - alpha_pos) * (1 - targets)
+        alpha_pos = alpha_pos.to(
+            device=logits.device,
+            dtype=logits.dtype,
         )
+        weight = weight * (
+            alpha_pos * targets
+            + (1 - alpha_pos) * (1 - targets)
+        )
+
     loss = weight * bce
+
     if reduction == "none":
         return loss
     if reduction == "sum":
         return loss.sum()
     if reduction == "mean":
         return loss.mean()
-    raise ValueError("reduction must be 'none', 'sum', or 'mean'.")
 
 
 def blend_focal_alpha(
-    raw_alpha_pos: torch.Tensor, strength: float
+    raw_alpha_pos: torch.Tensor,
+    strength: float,
 ) -> torch.Tensor:
     if not 0 <= strength <= 1:
-        raise ValueError("Focal alpha strength must be in [0, 1].")
-    return 0.5 + float(strength) * (raw_alpha_pos.float() - 0.5)
+        raise ValueError(
+            "Focal alpha strength must be in [0, 1]."
+        )
+
+    return 0.5 + float(strength) * (
+        raw_alpha_pos.float() - 0.5
+    )
 
 
 class MultiAnnotatorCORALLoss(torch.nn.Module):
@@ -388,12 +399,6 @@ class MultiAnnotatorCORALLoss(torch.nn.Module):
         global_alpha_pos: torch.Tensor = None,
     ):
         super().__init__()
-        if doctor_shift_reg_weight != 0:
-            raise ValueError("Doctor-shift regularization is not used.")
-        if focal_alpha_enabled and (
-            doctor_alpha_pos is None or global_alpha_pos is None
-        ):
-            raise ValueError("Enabled focal alpha requires both alpha tensors.")
 
         self.num_classes = int(num_classes)
         self.doctor_loss_weight = float(doctor_loss_weight)
@@ -404,17 +409,23 @@ class MultiAnnotatorCORALLoss(torch.nn.Module):
         self.focal_gamma = float(focal_gamma)
         self.focal_alpha_enabled = bool(focal_alpha_enabled)
         self.current_epoch = 0
+
         self.register_buffer(
             "doctor_alpha_pos",
-            torch.empty(0)
-            if doctor_alpha_pos is None
-            else doctor_alpha_pos.detach().float(),
+            (
+                torch.empty(0)
+                if doctor_alpha_pos is None
+                else doctor_alpha_pos.detach().float()
+            ),
         )
+
         self.register_buffer(
             "global_alpha_pos",
-            torch.empty(0)
-            if global_alpha_pos is None
-            else global_alpha_pos.detach().float(),
+            (
+                torch.empty(0)
+                if global_alpha_pos is None
+                else global_alpha_pos.detach().float()
+            ),
         )
 
     def set_epoch(self, epoch: int):
@@ -429,48 +440,63 @@ class MultiAnnotatorCORALLoss(torch.nn.Module):
             self.mode_loss_decay_epochs,
         )
 
-    def loss_components(self, outputs, soft_targets=None, hard_labels=None):
+    def loss_components(
+        self,
+        outputs,
+        soft_targets=None,
+        hard_labels=None,
+    ):
         del soft_targets
-        if hard_labels is None or hard_labels.ndim != 2:
-            raise ValueError("CORAL requires doctor labels shaped [B, M].")
 
         doctor_labels = hard_labels.long()
         doctor_logits = outputs["doctor_coral_logits"]
-        expected_shape = (*doctor_labels.shape, self.num_classes - 1)
-        if tuple(doctor_logits.shape) != expected_shape:
-            raise ValueError(
-                f"Expected doctor logits {expected_shape}, got "
-                f"{tuple(doctor_logits.shape)}."
-            )
 
         valid_mask = doctor_labels != self.ignore_index
-        if not valid_mask.any():
-            raise ValueError("A batch must contain at least one valid doctor label.")
         safe_labels = doctor_labels.masked_fill(~valid_mask, 0)
+
         doctor_targets = labels_to_coral_targets(
-            safe_labels, self.num_classes
+            safe_labels,
+            self.num_classes,
         )
+
         doctor_losses = focal_binary_cross_entropy_with_logits(
             doctor_logits,
             doctor_targets,
             self.focal_gamma,
-            self.doctor_alpha_pos if self.focal_alpha_enabled else None,
+            (
+                self.doctor_alpha_pos
+                if self.focal_alpha_enabled
+                else None
+            ),
             reduction="none",
         ).mean(dim=-1)
-        doctor_loss = self.doctor_loss_weight * doctor_losses[valid_mask].mean()
 
-        consensus_labels = median_consensus_from_batch(doctor_labels)
-        consensus_targets = labels_to_coral_targets(
-            consensus_labels, self.num_classes
+        doctor_loss = (
+            self.doctor_loss_weight
+            * doctor_losses[valid_mask].mean()
         )
+
+        consensus_labels = median_consensus_from_batch(
+            doctor_labels
+        )
+        consensus_targets = labels_to_coral_targets(
+            consensus_labels,
+            self.num_classes,
+        )
+
         consensus_loss = self.mode_loss_weight * (
             focal_binary_cross_entropy_with_logits(
                 outputs["global_coral_logits"],
                 consensus_targets,
                 self.focal_gamma,
-                self.global_alpha_pos if self.focal_alpha_enabled else None,
+                (
+                    self.global_alpha_pos
+                    if self.focal_alpha_enabled
+                    else None
+                ),
             )
         )
+
         return {
             "total_loss": doctor_loss + consensus_loss,
             "doctor_coral_loss": doctor_loss,
@@ -478,36 +504,60 @@ class MultiAnnotatorCORALLoss(torch.nn.Module):
             "mode_loss_weight": self.mode_loss_weight,
         }
 
-    def forward(self, outputs, soft_targets=None, hard_labels=None):
+    def forward(
+        self,
+        outputs,
+        soft_targets=None,
+        hard_labels=None,
+    ):
         return self.loss_components(
-            outputs, soft_targets, hard_labels
+            outputs,
+            soft_targets,
+            hard_labels,
         )["total_loss"]
 
 
 def build_criterion(train_dataset: PatientDataset):
     doctor_labels = torch.tensor(
-        train_dataset.df[LABEL_COLUMNS].to_numpy(), dtype=torch.long
+        train_dataset.df[LABEL_COLUMNS].to_numpy(),
+        dtype=torch.long,
     )
+
     valid = doctor_labels != IGNORE_INDEX
     safe_labels = doctor_labels.masked_fill(~valid, 0)
-    doctor_targets = labels_to_coral_targets(safe_labels, NUM_CLASSES)
+
+    doctor_targets = labels_to_coral_targets(
+        safe_labels,
+        NUM_CLASSES,
+    )
+
     valid_float = valid.unsqueeze(-1).float()
-    positive_rates = (doctor_targets * valid_float).sum(dim=0) / (
-        valid_float.sum(dim=0).clamp_min(1)
+
+    positive_rates = (
+        (doctor_targets * valid_float).sum(dim=0)
+        / valid_float.sum(dim=0).clamp_min(1)
     )
 
     consensus_labels = torch.tensor(
-        median_consensus_labels(train_dataset.df), dtype=torch.long
+        median_consensus_labels(train_dataset.df),
+        dtype=torch.long,
     )
+
     consensus_targets = labels_to_coral_targets(
-        consensus_labels, NUM_CLASSES
+        consensus_labels,
+        NUM_CLASSES,
     )
+
     doctor_alpha = blend_focal_alpha(
-        1 - positive_rates, FOCAL_ALPHA_STRENGTH
+        1 - positive_rates,
+        FOCAL_ALPHA_STRENGTH,
     )
+
     global_alpha = blend_focal_alpha(
-        1 - consensus_targets.mean(dim=0), FOCAL_ALPHA_STRENGTH
+        1 - consensus_targets.mean(dim=0),
+        FOCAL_ALPHA_STRENGTH,
     )
+
     return MultiAnnotatorCORALLoss(
         num_classes=NUM_CLASSES,
         doctor_loss_weight=DOCTOR_LOSS_WEIGHT,
@@ -522,37 +572,37 @@ def build_criterion(train_dataset: PatientDataset):
     )
 
 
-def dataset_from_df(df: pd.DataFrame) -> PatientDataset:
-    return PatientDataset(
-        df[REQUIRED_COLUMNS].copy(),
-        WAV_DIR,
-        normalize=ENCODER_BACKEND == "dolphin",
-        num_classes=NUM_CLASSES,
-        label_columns=LABEL_COLUMNS,
-    )
 
 
 def save_missing_audio_report(
-    datasets: Dict[str, PatientDataset], output_dir: Path
+    datasets: Dict[str, PatientDataset],
+    output_dir: Path,
 ):
     reports = []
+
     for split_name, dataset in datasets.items():
         missing = getattr(dataset, "missing_df", pd.DataFrame())
+
         if not missing.empty:
             missing = missing.copy()
             missing.insert(0, "dataset_split", split_name)
             reports.append(missing)
+
     if reports:
         report = pd.concat(reports, ignore_index=True)
+
         report.to_csv(
             output_dir / "missing_audio_files.csv",
             index=False,
             encoding="utf-8-sig",
         )
+
         print(f"Missing audio files: {len(report)}")
 
 
-def build_optimizer(model: torch.nn.Module) -> torch.optim.Optimizer:
+def build_optimizer(
+    model: torch.nn.Module,
+) -> torch.optim.Optimizer:
     head_parameters = [
         *model.temporal_cnn.parameters(),
         *model.attention_pooling.parameters(),
@@ -560,22 +610,31 @@ def build_optimizer(model: torch.nn.Module) -> torch.optim.Optimizer:
         *model.doctor_shift_module.parameters(),
         model.threshold_start,
     ]
-    if model.threshold_gaps is not None:
-        head_parameters.append(model.threshold_gaps)
 
-    seen = {id(parameter) for parameter in head_parameters}
+    seen = {
+        id(parameter)
+        for parameter in head_parameters
+    }
+
     groups = [
         {
-            "params": [p for p in head_parameters if p.requires_grad],
+            "params": [
+                parameter
+                for parameter in head_parameters
+                if parameter.requires_grad
+            ],
             "lr": LEARNING_RATE,
             "weight_decay": WEIGHT_DECAY,
         }
     ]
+
     encoder_parameters = [
         parameter
         for parameter in model.encoder.parameters()
-        if parameter.requires_grad and id(parameter) not in seen
+        if parameter.requires_grad
+        and id(parameter) not in seen
     ]
+
     if encoder_parameters:
         groups.append(
             {
@@ -584,12 +643,22 @@ def build_optimizer(model: torch.nn.Module) -> torch.optim.Optimizer:
                 "weight_decay": WEIGHT_DECAY,
             }
         )
+
     return torch.optim.AdamW(groups)
 
 
 @torch.no_grad()
-def evaluate_split(model, dataset, criterion) -> Dict[str, object]:
-    loader = build_loader(dataset, BATCH_SIZE, shuffle=False)
+def evaluate_split(
+    model,
+    dataset,
+    criterion,
+) -> Dict[str, object]:
+    loader = build_loader(
+        dataset,
+        BATCH_SIZE,
+        shuffle=False,
+    )
+
     return evaluate_model(
         model,
         loader,
@@ -600,8 +669,14 @@ def evaluate_split(model, dataset, criterion) -> Dict[str, object]:
     )
 
 
-def train_one_epoch(model, train_loader, criterion, optimizer) -> dict:
+def train_one_epoch(
+    model,
+    train_loader,
+    criterion,
+    optimizer,
+) -> dict:
     model.train()
+
     totals = {
         "total_loss": 0.0,
         "doctor_coral_loss": 0.0,
@@ -609,59 +684,104 @@ def train_one_epoch(model, train_loader, criterion, optimizer) -> dict:
     }
     total_samples = 0
 
-    for wavs, lengths, _soft_labels, hard_labels, _patient_ids in train_loader:
-        wavs = wavs.to(DEVICE, non_blocking=True)
-        lengths = lengths.to(DEVICE, non_blocking=True)
-        hard_labels = hard_labels.to(DEVICE, non_blocking=True)
+    for (
+        wavs,
+        lengths,
+        _soft_labels,
+        hard_labels,
+        _patient_ids,
+    ) in train_loader:
+        wavs = wavs.to(
+            DEVICE,
+            non_blocking=True,
+        )
+        lengths = lengths.to(
+            DEVICE,
+            non_blocking=True,
+        )
+        hard_labels = hard_labels.to(
+            DEVICE,
+            non_blocking=True,
+        )
 
         optimizer.zero_grad(set_to_none=True)
+
         components = criterion.loss_components(
-            model(wavs, lengths), hard_labels=hard_labels
+            model(wavs, lengths),
+            hard_labels=hard_labels,
         )
+
         loss = components["total_loss"]
+
         if not torch.isfinite(loss):
-            raise FloatingPointError("Non-finite loss encountered.")
+            raise FloatingPointError(
+                "Non-finite loss encountered."
+            )
+
         loss.backward()
+
         torch.nn.utils.clip_grad_norm_(
-            [p for p in model.parameters() if p.requires_grad], 5.0
+            [
+                parameter
+                for parameter in model.parameters()
+                if parameter.requires_grad
+            ],
+            5.0,
         )
+
         optimizer.step()
 
         batch_size = hard_labels.size(0)
+
         for name in totals:
-            totals[name] += float(components[name].item()) * batch_size
+            totals[name] += (
+                float(components[name].item())
+                * batch_size
+            )
+
         total_samples += batch_size
 
     if total_samples == 0:
-        raise ValueError("Cannot train with an empty data loader.")
+        raise ValueError(
+            "Cannot train with an empty data loader."
+        )
+
     return {
-        name: value / total_samples for name, value in totals.items()
+        name: value / total_samples
+        for name, value in totals.items()
     }
 
 
-def format_split_counts(df: pd.DataFrame) -> str:
-    labels = median_consensus_labels(df)
-    counts = np.bincount(labels, minlength=NUM_CLASSES)
-    return ", ".join(
-        f"{CLASS_NAMES[index]}={count}"
-        for index, count in enumerate(counts)
-    )
 
 
-def metric_row(prefix: str, evaluation: Dict[str, object]) -> Dict[str, float]:
+def metric_row(
+    prefix: str,
+    evaluation: Dict[str, object],
+) -> Dict[str, float]:
     row = {
-        f"{prefix}_loss": float(evaluation["total_loss"]),
+        f"{prefix}_loss": float(
+            evaluation["total_loss"]
+        ),
         f"{prefix}_doctor_coral_loss": float(
             evaluation["doctor_coral_loss"]
         ),
-        f"{prefix}_consensus_loss": float(evaluation["consensus_loss"]),
+        f"{prefix}_consensus_loss": float(
+            evaluation["consensus_loss"]
+        ),
     }
-    metric_sets = {"median": evaluation["consensus_metrics"]}
+
+    metric_sets = {
+        "median": evaluation["consensus_metrics"]
+    }
+
     for label_name in LABEL_COLUMNS:
-        metric_sets[label_name] = evaluation[f"{label_name}_metrics"]
+        metric_sets[label_name] = evaluation[
+            f"{label_name}_metrics"
+        ]
         metric_sets[f"{label_name}_head"] = evaluation[
             f"{label_name}_head_metrics"
         ]
+
     for label_name, metrics in metric_sets.items():
         for metric in (
             "acc",
@@ -671,32 +791,54 @@ def metric_row(prefix: str, evaluation: Dict[str, object]) -> Dict[str, float]:
             "qwk",
             "mae",
         ):
-            row[f"{prefix}_{label_name}_{metric}"] = float(metrics[metric])
+            row[
+                f"{prefix}_{label_name}_{metric}"
+            ] = float(metrics[metric])
+
     return row
 
 
 def save_metric_details(
-    output_dir: Path, split_name: str, evaluation: Dict[str, object]
+    output_dir: Path,
+    split_name: str,
+    evaluation: Dict[str, object],
 ):
-    metric_sets = {"median": evaluation["consensus_metrics"]}
+    metric_sets = {
+        "median": evaluation["consensus_metrics"]
+    }
+
     for label_name in LABEL_COLUMNS:
-        metric_sets[label_name] = evaluation[f"{label_name}_metrics"]
+        metric_sets[label_name] = evaluation[
+            f"{label_name}_metrics"
+        ]
         metric_sets[f"{label_name}_head"] = evaluation[
             f"{label_name}_head_metrics"
         ]
 
     per_class_rows = []
+
     for scope, metrics in metric_sets.items():
-        pd.DataFrame(metrics["confusion_matrix"]).to_csv(
-            output_dir / f"{split_name}_confusion_matrix_{scope}.csv",
+        pd.DataFrame(
+            metrics["confusion_matrix"]
+        ).to_csv(
+            output_dir
+            / f"{split_name}_confusion_matrix_{scope}.csv",
             index=False,
         )
+
         for class_id, values in metrics["per_class"].items():
             per_class_rows.append(
-                {"scope": scope, "class_id": class_id, **values}
+                {
+                    "scope": scope,
+                    "class_id": class_id,
+                    **values,
+                }
             )
+
     pd.DataFrame(per_class_rows).to_csv(
-        output_dir / f"{split_name}_per_class_metrics.csv", index=False
+        output_dir
+        / f"{split_name}_per_class_metrics.csv",
+        index=False,
     )
 
 
@@ -710,17 +852,35 @@ def save_prediction_table(
         "outer_fold": outer_fold,
         "true_median": evaluation["consensus_labels"],
         "pred": evaluation["preds"],
-        "true_binary": evaluation["binary_consensus_labels"],
-        "binary_pred": evaluation["binary_predictions"],
-        "prob_abnormal": evaluation["binary_probs"][:, 1],
+        "true_binary": evaluation[
+            "binary_consensus_labels"
+        ],
+        "binary_pred": evaluation[
+            "binary_predictions"
+        ],
+        "prob_abnormal": evaluation[
+            "binary_probs"
+        ][:, 1],
     }
+
     for class_id in range(NUM_CLASSES):
-        rows[f"global_prob_{class_id}"] = evaluation["probs"][:, class_id]
-    for doctor_index, label_name in enumerate(LABEL_COLUMNS):
-        rows[label_name] = evaluation["hard_labels"][:, doctor_index]
-        rows[f"doctor{doctor_index}_pred"] = evaluation[
-            "annotator_preds"
+        rows[f"global_prob_{class_id}"] = (
+            evaluation["probs"][:, class_id]
+        )
+
+    for doctor_index, label_name in enumerate(
+        LABEL_COLUMNS
+    ):
+        rows[label_name] = evaluation[
+            "hard_labels"
         ][:, doctor_index]
+
+        rows[f"doctor{doctor_index}_pred"] = (
+            evaluation["annotator_preds"][
+                :, doctor_index
+            ]
+        )
+
     pd.DataFrame(rows).to_csv(
         output_dir / "outer_test_predictions.csv",
         index=False,
@@ -728,30 +888,73 @@ def save_prediction_table(
     )
 
 
-def plot_training_curves(history: pd.DataFrame, output_dir: Path):
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.5))
-    axes[0].plot(history["epoch"], history["train_loss"], label="Train")
-    axes[0].plot(history["epoch"], history["val_loss"], label="Validation")
-    axes[0].set(xlabel="Epoch", ylabel="Loss", title="Loss")
+def plot_training_curves(
+    history: pd.DataFrame,
+    output_dir: Path,
+):
+    fig, axes = plt.subplots(
+        1,
+        2,
+        figsize=(12, 4.5),
+    )
+
+    axes[0].plot(
+        history["epoch"],
+        history["train_loss"],
+        label="Train",
+    )
+    axes[0].plot(
+        history["epoch"],
+        history["val_loss"],
+        label="Validation",
+    )
+    axes[0].set(
+        xlabel="Epoch",
+        ylabel="Loss",
+        title="Loss",
+    )
     axes[0].legend()
     axes[0].grid(alpha=0.25)
 
     axes[1].plot(
-        history["epoch"], history["val_macro_f1"], label="Macro-F1"
+        history["epoch"],
+        history["val_macro_f1"],
+        label="Macro-F1",
     )
-    axes[1].plot(history["epoch"], history["val_qwk"], label="QWK")
-    axes[1].set(xlabel="Epoch", ylabel="Score", title="Validation metrics")
+    axes[1].plot(
+        history["epoch"],
+        history["val_qwk"],
+        label="QWK",
+    )
+    axes[1].set(
+        xlabel="Epoch",
+        ylabel="Score",
+        title="Validation metrics",
+    )
     axes[1].legend()
     axes[1].grid(alpha=0.25)
+
     fig.tight_layout()
-    fig.savefig(output_dir / "training_curves.png", dpi=180)
+    fig.savefig(
+        output_dir / "training_curves.png",
+        dpi=180,
+    )
     plt.close(fig)
 
 
-def aggregate_outer_oof_metrics(oof_df: pd.DataFrame) -> Dict[str, object]:
-    true_labels = oof_df["true_median"].to_numpy(dtype=int)
-    predictions = oof_df["pred"].to_numpy(dtype=int)
+def aggregate_outer_oof_metrics(
+    oof_df: pd.DataFrame,
+) -> Dict[str, object]:
+    true_labels = oof_df[
+        "true_median"
+    ].to_numpy(dtype=int)
+
+    predictions = oof_df[
+        "pred"
+    ].to_numpy(dtype=int)
+
     class_ids = list(range(NUM_CLASSES))
+
     precision, recall, per_class_f1, support = (
         precision_recall_fscore_support(
             true_labels,
@@ -761,12 +964,19 @@ def aggregate_outer_oof_metrics(oof_df: pd.DataFrame) -> Dict[str, object]:
             zero_division=0,
         )
     )
-    probability_columns = [f"global_prob_{index}" for index in class_ids]
+
+    probability_columns = [
+        f"global_prob_{index}"
+        for index in class_ids
+    ]
+
     try:
         auc = float(
             roc_auc_score(
                 true_labels,
-                oof_df[probability_columns].to_numpy(),
+                oof_df[
+                    probability_columns
+                ].to_numpy(),
                 labels=class_ids,
                 multi_class="ovr",
                 average="macro",
@@ -774,14 +984,29 @@ def aggregate_outer_oof_metrics(oof_df: pd.DataFrame) -> Dict[str, object]:
         )
     except ValueError:
         auc = float("nan")
+
     return {
-        "acc": float(accuracy_score(true_labels, predictions)),
-        "balanced_acc": float(
-            balanced_accuracy_score(true_labels, predictions)
+        "acc": float(
+            accuracy_score(
+                true_labels,
+                predictions,
+            )
         ),
-        "macro_precision": float(np.mean(precision)),
-        "macro_recall": float(np.mean(recall)),
-        "macro_f1": float(np.mean(per_class_f1)),
+        "balanced_acc": float(
+            balanced_accuracy_score(
+                true_labels,
+                predictions,
+            )
+        ),
+        "macro_precision": float(
+            np.mean(precision)
+        ),
+        "macro_recall": float(
+            np.mean(recall)
+        ),
+        "macro_f1": float(
+            np.mean(per_class_f1)
+        ),
         "weighted_f1": float(
             f1_score(
                 true_labels,
@@ -792,16 +1017,31 @@ def aggregate_outer_oof_metrics(oof_df: pd.DataFrame) -> Dict[str, object]:
         ),
         "auc_macro_ovr": auc,
         "qwk": float(
-            cohen_kappa_score(true_labels, predictions, weights="quadratic")
+            cohen_kappa_score(
+                true_labels,
+                predictions,
+                weights="quadratic",
+            )
         ),
-        "mae": float(np.mean(np.abs(true_labels - predictions))),
+        "mae": float(
+            np.mean(
+                np.abs(
+                    true_labels - predictions
+                )
+            )
+        ),
         "confusion_matrix": confusion_matrix(
-            true_labels, predictions, labels=class_ids
+            true_labels,
+            predictions,
+            labels=class_ids,
         ),
         "per_class": pd.DataFrame(
             {
                 "class_id": class_ids,
-                "class_name": [CLASS_NAMES[index] for index in class_ids],
+                "class_name": [
+                    CLASS_NAMES[index]
+                    for index in class_ids
+                ],
                 "precision": precision,
                 "recall": recall,
                 "f1": per_class_f1,
@@ -809,6 +1049,7 @@ def aggregate_outer_oof_metrics(oof_df: pd.DataFrame) -> Dict[str, object]:
             }
         ),
     }
+
 
 
 def run_one_cv_fold(
@@ -819,46 +1060,92 @@ def run_one_cv_fold(
     root_output_dir: Path,
 ) -> Dict[str, object]:
     set_seed(seed + fold_index)
-    output_dir = root_output_dir / f"fold_{fold_index}"
-    output_dir.mkdir(parents=True, exist_ok=True)
+
+    output_dir = (
+        root_output_dir
+        / f"fold_{fold_index}"
+    )
+    output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
     splitter = StratifiedShuffleSplit(
         n_splits=1,
         test_size=INNER_VAL_RATIO,
         random_state=seed * 100 + fold_index,
     )
-    labels = median_consensus_labels(outer_train_df)
-    train_indices, val_indices = next(
-        splitter.split(outer_train_df, labels)
-    )
-    train_df = outer_train_df.iloc[train_indices].reset_index(drop=True)
-    val_df = outer_train_df.iloc[val_indices].reset_index(drop=True)
 
-    print(f"\n========== Fold {fold_index}/{CV_NUM_FOLDS} ==========")
+    labels = median_consensus_labels(
+        outer_train_df
+    )
+
+    train_indices, val_indices = next(
+        splitter.split(
+            outer_train_df,
+            labels,
+        )
+    )
+
+    train_df = outer_train_df.iloc[
+        train_indices
+    ].reset_index(drop=True)
+
+    val_df = outer_train_df.iloc[
+        val_indices
+    ].reset_index(drop=True)
+
+    print(
+        f"\n========== Fold "
+        f"{fold_index}/{CV_NUM_FOLDS} =========="
+    )
+
     for name, frame in (
         ("train", train_df),
         ("validation", val_df),
         ("test", outer_test_df),
     ):
-        print(f"{name}: n={len(frame)} | {format_split_counts(frame)}")
+        print(
+            f"{name}: n={len(frame)} | "
+            f"{format_split_counts(frame)}"
+        )
 
     train_dataset = dataset_from_df(train_df)
     val_dataset = dataset_from_df(val_df)
     test_dataset = dataset_from_df(outer_test_df)
+
     save_missing_audio_report(
-        {"train": train_dataset, "validation": val_dataset, "test": test_dataset},
+        {
+            "train": train_dataset,
+            "validation": val_dataset,
+            "test": test_dataset,
+        },
         output_dir,
     )
 
-    train_loader = build_loader(train_dataset, BATCH_SIZE, shuffle=True)
+    train_loader = build_loader(
+        train_dataset,
+        BATCH_SIZE,
+        shuffle=True,
+    )
+
     model = build_model(DEVICE)
-    criterion = build_criterion(train_dataset).to(DEVICE)
+    criterion = build_criterion(
+        train_dataset
+    ).to(DEVICE)
     optimizer = build_optimizer(model)
 
-    total_parameters = sum(p.numel() for p in model.parameters())
-    trainable_parameters = sum(
-        p.numel() for p in model.parameters() if p.requires_grad
+    total_parameters = sum(
+        parameter.numel()
+        for parameter in model.parameters()
     )
+
+    trainable_parameters = sum(
+        parameter.numel()
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    )
+
     print(
         f"Parameters: {total_parameters:,} total, "
         f"{trainable_parameters:,} trainable"
@@ -873,63 +1160,123 @@ def run_one_cv_fold(
 
     for epoch in range(1, NUM_EPOCHS + 1):
         criterion.set_epoch(epoch)
+
         train_metrics = train_one_epoch(
-            model, train_loader, criterion, optimizer
+            model,
+            train_loader,
+            criterion,
+            optimizer,
         )
-        val_metrics = evaluate_split(model, val_dataset, criterion)
-        val_summary = val_metrics["consensus_metrics"]
-        score = float(val_summary["macro_f1"])
+
+        val_metrics = evaluate_split(
+            model,
+            val_dataset,
+            criterion,
+        )
+
+        val_summary = val_metrics[
+            "consensus_metrics"
+        ]
+        score = float(
+            val_summary["macro_f1"]
+        )
 
         history_rows.append(
             {
                 "epoch": epoch,
-                "train_loss": train_metrics["total_loss"],
-                "train_doctor_coral_loss": train_metrics[
-                    "doctor_coral_loss"
+                "train_loss": train_metrics[
+                    "total_loss"
                 ],
-                "train_consensus_loss": train_metrics["consensus_loss"],
-                "val_loss": val_metrics["total_loss"],
-                "val_doctor_coral_loss": val_metrics[
-                    "doctor_coral_loss"
+                "train_doctor_coral_loss":
+                    train_metrics[
+                        "doctor_coral_loss"
+                    ],
+                "train_consensus_loss":
+                    train_metrics[
+                        "consensus_loss"
+                    ],
+                "val_loss": val_metrics[
+                    "total_loss"
                 ],
-                "val_consensus_loss": val_metrics["consensus_loss"],
-                "mode_loss_weight": val_metrics["mode_loss_weight"],
+                "val_doctor_coral_loss":
+                    val_metrics[
+                        "doctor_coral_loss"
+                    ],
+                "val_consensus_loss":
+                    val_metrics[
+                        "consensus_loss"
+                    ],
+                "mode_loss_weight":
+                    val_metrics[
+                        "mode_loss_weight"
+                    ],
                 "val_macro_f1": score,
-                "val_qwk": float(val_summary["qwk"]),
+                "val_qwk": float(
+                    val_summary["qwk"]
+                ),
             }
         )
+
         print(
-            f"Epoch {epoch:03d} | train={train_metrics['total_loss']:.5f} | "
+            f"Epoch {epoch:03d} | "
+            f"train={train_metrics['total_loss']:.5f} | "
             f"val={val_metrics['total_loss']:.5f} | "
-            f"macro_f1={score:.4f} | qwk={val_summary['qwk']:.4f}"
+            f"macro_f1={score:.4f} | "
+            f"qwk={val_summary['qwk']:.4f}"
         )
 
         if np.isfinite(score) and score > best_score:
             best_score = score
             best_epoch = epoch
-            best_val_loss = float(val_metrics["total_loss"])
+            best_val_loss = float(
+                val_metrics["total_loss"]
+            )
+
             best_state = {
                 name: tensor.detach().cpu().clone()
-                for name, tensor in model.state_dict().items()
+                for name, tensor
+                in model.state_dict().items()
             }
+
             epochs_without_improvement = 0
+
         else:
             epochs_without_improvement += 1
-        if epochs_without_improvement >= EARLY_STOPPING_PATIENCE:
-            print(f"Early stopping; best epoch: {best_epoch}")
-            break
 
-    if best_state is None:
-        raise RuntimeError(f"Fold {fold_index} produced no valid checkpoint.")
+        if (
+            epochs_without_improvement
+            >= EARLY_STOPPING_PATIENCE
+        ):
+            print(
+                f"Early stopping; "
+                f"best epoch: {best_epoch}"
+            )
+            break
 
     model.load_state_dict(best_state)
     model.to(DEVICE)
+
     criterion.set_epoch(best_epoch)
-    val_metrics = evaluate_split(model, val_dataset, criterion)
-    test_metrics = evaluate_split(model, test_dataset, criterion)
+
+    val_metrics = evaluate_split(
+        model,
+        val_dataset,
+        criterion,
+    )
+
+    test_metrics = evaluate_split(
+        model,
+        test_dataset,
+        criterion,
+    )
 
     history = pd.DataFrame(history_rows)
-    history.to_csv(output_dir / "loss_history.csv", index=False)
+
+    history.to_csv(
+        output_dir / "loss_history.csv",
+        index=False,
+    )
+
     pd.DataFrame(
         [
             {
@@ -938,11 +1285,33 @@ def run_one_cv_fold(
                 "best_value": best_score,
             }
         ]
-    ).to_csv(output_dir / "best_epochs.csv", index=False)
-    plot_training_curves(history, output_dir)
-    save_metric_details(output_dir, "inner_val", val_metrics)
-    save_metric_details(output_dir, "outer_test", test_metrics)
-    save_prediction_table(output_dir, test_metrics, fold_index)
+    ).to_csv(
+        output_dir / "best_epochs.csv",
+        index=False,
+    )
+
+    plot_training_curves(
+        history,
+        output_dir,
+    )
+
+    save_metric_details(
+        output_dir,
+        "inner_val",
+        val_metrics,
+    )
+
+    save_metric_details(
+        output_dir,
+        "outer_test",
+        test_metrics,
+    )
+
+    save_prediction_table(
+        output_dir,
+        test_metrics,
+        fold_index,
+    )
 
     row = {
         "seed": seed,
@@ -953,55 +1322,99 @@ def run_one_cv_fold(
         "best_epoch": best_epoch,
         "best_val_macro_f1": best_score,
         "best_val_loss": best_val_loss,
-        **metric_row("inner_val", val_metrics),
-        **metric_row("outer_test", test_metrics),
+        **metric_row(
+            "inner_val",
+            val_metrics,
+        ),
+        **metric_row(
+            "outer_test",
+            test_metrics,
+        ),
     }
-    pd.DataFrame([row]).to_csv(output_dir / "metrics.csv", index=False)
 
-    summary = test_metrics["consensus_metrics"]
-    print(
-        f"Fold {fold_index} test | accuracy={summary['acc']:.4f} | "
-        f"macro_f1={summary['macro_f1']:.4f} | qwk={summary['qwk']:.4f}"
+    pd.DataFrame([row]).to_csv(
+        output_dir / "metrics.csv",
+        index=False,
     )
+
+    summary = test_metrics[
+        "consensus_metrics"
+    ]
+
+    print(
+        f"Fold {fold_index} test | "
+        f"accuracy={summary['acc']:.4f} | "
+        f"macro_f1={summary['macro_f1']:.4f} | "
+        f"qwk={summary['qwk']:.4f}"
+    )
+
     return row
 
 
 def run_nested_five_fold_cv(
-    seed: int, root_output_dir: Path
+    seed: int,
+    root_output_dir: Path,
 ) -> Dict[str, object]:
     set_seed(seed)
-    root_output_dir.mkdir(parents=True, exist_ok=True)
-    split_dfs = load_fixed_splits()
-    all_df = pd.concat(split_dfs.values(), ignore_index=True)
-    if all_df["patient_id"].duplicated().any():
-        raise ValueError("The CV cohort contains duplicate patient IDs.")
 
-    consensus = median_consensus_labels(all_df)
-    if len(np.unique(consensus)) < NUM_CLASSES:
-        raise ValueError("The CV cohort must contain all four classes.")
+    root_output_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    split_dfs = load_fixed_splits()
+
+    all_df = pd.concat(
+        split_dfs.values(),
+        ignore_index=True,
+    )
+
+    consensus = median_consensus_labels(
+        all_df
+    )
+
     print(
-        f"Nested five-fold CV | seed={seed} | n={len(all_df)} | "
-        f"backend={ENCODER_BACKEND} | device={DEVICE}"
+        f"Nested five-fold CV | "
+        f"seed={seed} | "
+        f"n={len(all_df)} | "
+        f"backend={ENCODER_BACKEND} | "
+        f"device={DEVICE}"
     )
 
     splitter = StratifiedKFold(
-        n_splits=CV_NUM_FOLDS, shuffle=True, random_state=seed
+        n_splits=CV_NUM_FOLDS,
+        shuffle=True,
+        random_state=seed,
     )
+
     fold_rows = []
     oof_frames = []
     assignments = []
-    for fold_index, (train_indices, test_indices) in enumerate(
-        splitter.split(all_df, consensus), start=1
+
+    for fold_index, (
+        train_indices,
+        test_indices,
+    ) in enumerate(
+        splitter.split(
+            all_df,
+            consensus,
+        ),
+        start=1,
     ):
         fold_rows.append(
             run_one_cv_fold(
                 seed,
                 fold_index,
-                all_df.iloc[train_indices].reset_index(drop=True),
-                all_df.iloc[test_indices].reset_index(drop=True),
+                all_df.iloc[
+                    train_indices
+                ].reset_index(drop=True),
+                all_df.iloc[
+                    test_indices
+                ].reset_index(drop=True),
                 root_output_dir,
             )
         )
+
         oof_frames.append(
             pd.read_csv(
                 root_output_dir
@@ -1010,120 +1423,251 @@ def run_nested_five_fold_cv(
                 dtype={"patient_id": str},
             )
         )
+
         assignments.append(
             pd.DataFrame(
                 {
                     "outer_fold": fold_index,
-                    "patient_id": all_df.iloc[test_indices][
-                        "patient_id"
-                    ].to_numpy(),
-                    "true_median": consensus[test_indices],
+                    "patient_id":
+                        all_df.iloc[
+                            test_indices
+                        ]["patient_id"].to_numpy(),
+                    "true_median":
+                        consensus[test_indices],
                 }
             )
         )
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    pd.concat(assignments, ignore_index=True).to_csv(
-        root_output_dir / "outer_fold_assignments.csv",
+    pd.concat(
+        assignments,
+        ignore_index=True,
+    ).to_csv(
+        root_output_dir
+        / "outer_fold_assignments.csv",
         index=False,
         encoding="utf-8-sig",
     )
-    fold_results = pd.DataFrame(fold_rows)
-    fold_results.to_csv(root_output_dir / "outer_fold_metrics.csv", index=False)
+
+    fold_results = pd.DataFrame(
+        fold_rows
+    )
+
+    fold_results.to_csv(
+        root_output_dir
+        / "outer_fold_metrics.csv",
+        index=False,
+    )
 
     summary_rows = []
+
     summary_columns = [
         column
         for column in fold_results
-        if column == "best_epoch" or column.startswith("outer_test_median_")
+        if (
+            column == "best_epoch"
+            or column.startswith(
+                "outer_test_median_"
+            )
+        )
     ]
+
     for column in summary_columns:
-        values = fold_results[column].astype(float)
+        values = fold_results[
+            column
+        ].astype(float)
+
         summary_rows.append(
             {
                 "metric": column,
-                "mean": float(values.mean()),
-                "std": float(values.std(ddof=1)),
+                "mean": float(
+                    values.mean()
+                ),
+                "std": float(
+                    values.std(ddof=1)
+                ),
             }
         )
-    pd.DataFrame(summary_rows).to_csv(
-        root_output_dir / "outer_fold_summary.csv", index=False
+
+    pd.DataFrame(
+        summary_rows
+    ).to_csv(
+        root_output_dir
+        / "outer_fold_summary.csv",
+        index=False,
     )
 
     oof_df = (
-        pd.concat(oof_frames, ignore_index=True)
+        pd.concat(
+            oof_frames,
+            ignore_index=True,
+        )
         .sort_values("patient_id")
         .reset_index(drop=True)
     )
-    if oof_df["patient_id"].duplicated().any() or len(oof_df) != len(all_df):
-        raise RuntimeError("OOF predictions must contain every sample once.")
+
     oof_df.to_csv(
-        root_output_dir / "outer_oof_predictions.csv",
+        root_output_dir
+        / "outer_oof_predictions.csv",
         index=False,
         encoding="utf-8-sig",
     )
 
-    pooled = aggregate_outer_oof_metrics(oof_df)
-    pd.DataFrame(pooled["confusion_matrix"]).to_csv(
-        root_output_dir / "pooled_oof_confusion_matrix_median.csv",
+    pooled = aggregate_outer_oof_metrics(
+        oof_df
+    )
+
+    pd.DataFrame(
+        pooled["confusion_matrix"]
+    ).to_csv(
+        root_output_dir
+        / "pooled_oof_confusion_matrix_median.csv",
         index=False,
     )
+
     pooled["per_class"].to_csv(
-        root_output_dir / "pooled_oof_per_class.csv", index=False
+        root_output_dir
+        / "pooled_oof_per_class.csv",
+        index=False,
     )
+
     scalar_metrics = {
         f"outer_oof_{name}": value
         for name, value in pooled.items()
-        if name not in {"confusion_matrix", "per_class"}
+        if name not in {
+            "confusion_matrix",
+            "per_class",
+        }
     }
-    pd.DataFrame([{"seed": seed, **scalar_metrics}]).to_csv(
-        root_output_dir / "pooled_oof_metrics.csv", index=False
+
+    pd.DataFrame(
+        [
+            {
+                "seed": seed,
+                **scalar_metrics,
+            }
+        ]
+    ).to_csv(
+        root_output_dir
+        / "pooled_oof_metrics.csv",
+        index=False,
     )
+
     print(
-        f"Pooled OOF | accuracy={pooled['acc']:.4f} | "
-        f"macro_f1={pooled['macro_f1']:.4f} | qwk={pooled['qwk']:.4f}"
+        f"Pooled OOF | "
+        f"accuracy={pooled['acc']:.4f} | "
+        f"macro_f1={pooled['macro_f1']:.4f} | "
+        f"qwk={pooled['qwk']:.4f}"
     )
+
     return scalar_metrics
 
 
 def run_five_fold_cv_experiment():
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    RESULTS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
     seed_rows = []
+
     for seed in RANDOM_SEEDS:
-        metrics = run_nested_five_fold_cv(seed, RESULTS_DIR / f"seed_{seed}")
-        seed_rows.append({"seed": seed, **metrics})
+        metrics = run_nested_five_fold_cv(
+            seed,
+            RESULTS_DIR / f"seed_{seed}",
+        )
+
+        seed_rows.append(
+            {
+                "seed": seed,
+                **metrics,
+            }
+        )
 
     results = pd.DataFrame(seed_rows)
-    results.to_csv(RESULTS_DIR / "nested_oof_results_by_seed.csv", index=False)
+
+    results.to_csv(
+        RESULTS_DIR
+        / "nested_oof_results_by_seed.csv",
+        index=False,
+    )
+
     if len(results) > 1:
         rows = []
+
         for column in results:
             if column.startswith("outer_oof_"):
-                values = results[column].astype(float)
+                values = results[
+                    column
+                ].astype(float)
+
                 rows.append(
                     {
                         "metric": column,
-                        "mean": float(values.mean()),
-                        "std": float(values.std(ddof=1)),
+                        "mean": float(
+                            values.mean()
+                        ),
+                        "std": float(
+                            values.std(ddof=1)
+                        ),
                     }
                 )
+
         pd.DataFrame(rows).to_csv(
-            RESULTS_DIR / "nested_oof_summary_by_seed.csv", index=False
+            RESULTS_DIR
+            / "nested_oof_summary_by_seed.csv",
+            index=False,
         )
 
 
 def run_with_training_log():
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = RESULTS_DIR / f"training_{timestamp}.log"
-    with log_path.open("w", encoding="utf-8", buffering=1) as log_file:
-        with redirect_stdout(TeeStream(sys.stdout, log_file)), redirect_stderr(
-            TeeStream(sys.stderr, log_file)
+    RESULTS_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    timestamp = datetime.now().strftime(
+        "%Y%m%d_%H%M%S"
+    )
+
+    log_path = (
+        RESULTS_DIR
+        / f"training_{timestamp}.log"
+    )
+
+    with log_path.open(
+        "w",
+        encoding="utf-8",
+        buffering=1,
+    ) as log_file:
+        with (
+            redirect_stdout(
+                TeeStream(
+                    sys.stdout,
+                    log_file,
+                )
+            ),
+            redirect_stderr(
+                TeeStream(
+                    sys.stderr,
+                    log_file,
+                )
+            ),
         ):
-            print(f"Python: {sys.version.split()[0]} | PyTorch: {torch.__version__}")
+            print(
+                f"Python: "
+                f"{sys.version.split()[0]} | "
+                f"PyTorch: {torch.__version__}"
+            )
+
             run_five_fold_cv_experiment()
-    print(f"Training log saved to: {log_path}")
+
+    print(
+        f"Training log saved to: "
+        f"{log_path}"
+    )
 
 
 if __name__ == "__main__":
